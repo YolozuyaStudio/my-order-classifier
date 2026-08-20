@@ -11,10 +11,11 @@ st.set_page_config(page_title="出貨自動化全能工具箱", page_icon="📦"
 
 st.title("📦 訂單處理與出貨自動化全能工具箱")
 
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "📋 工具一：訂單自動分類與整理", 
     "🚚 工具二：轉 7-11 批量匯入檔", 
-    "✂️ 工具三：超商 4 格單裁切工具"
+    "🏪 工具三：轉全家批量匯入檔",
+    "✂️ 工具四：超商 4 格單裁切工具"
 ])
 
 COLOR_PALETTE = [
@@ -319,9 +320,102 @@ with tab2:
             st.error(f"❌ 處理 711 匯入檔時發生錯誤：{e}")
 
 # ==========================================
-# ✂️ TAB 3: 超商 4 格單裁切工具 (智慧剔除空白頁)
+# 🏪 TAB 3: 轉全家批量匯入檔 (公版格式)
 # ==========================================
 with tab3:
+    st.markdown("將整理好的 **全家收件資料 Excel** 上傳，系統會自動轉成 **全家官方店到店批量匯入公版格式**！")
+    
+    col_f_sender1, col_f_sender2, col_f_sender3, col_f_sender4 = st.columns(4)
+    with col_f_sender1:
+        f_sender_name = st.text_input("寄件人姓名", value="有樂作業", key="f_name")
+    with col_f_sender2:
+        f_sender_phone = st.text_input("寄件人手機", value="0900000000", key="f_phone")
+    with col_f_sender3:
+        f_sender_country = st.text_input("寄件人手機國碼", value="886", key="f_country")
+    with col_f_sender4:
+        f_ship_service = st.selectbox("寄件服務類型", ["1 -> (常溫)一般寄件", "11 -> (常溫)寄件取貨付款"], index=0, key="f_service")
+
+    uploaded_fm_file = st.file_uploader("請上傳已整理好的全家訂單 Excel 檔案", type=["xlsx", "xls", "csv"], key="u4")
+
+    if uploaded_fm_file is not None:
+        try:
+            df_fm_in = pd.read_csv(uploaded_fm_file, dtype=str) if uploaded_fm_file.name.endswith('.csv') else pd.read_excel(uploaded_fm_file, dtype=str)
+            st.success(f"成功讀取全家訂單，共 {len(df_fm_in)} 筆。")
+            
+            cols_fm = list(df_fm_in.columns)
+            cfm_1, cfm_2, cfm_3, cfm_4 = st.columns(4)
+            with cfm_1:
+                col_fm_recv_name = st.selectbox("收件人姓名", cols_fm, index=0 if "收件人姓名" not in cols_fm else cols_fm.index("收件人姓名"), key="fm_n")
+            with cfm_2:
+                col_fm_recv_phone = st.selectbox("收件人電話", cols_fm, index=0 if "收件人電話" not in cols_fm else cols_fm.index("收件人電話"), key="fm_p")
+            with cfm_3:
+                col_fm_recv_store_code = st.selectbox("取件店號 (門市店號)", cols_fm, index=0 if "收件店號" not in cols_fm else cols_fm.index("收件店號"), key="fm_sc")
+            with cfm_4:
+                col_fm_recv_store = st.selectbox("取件店舖 (門市名稱)", cols_fm, index=0 if "收件店名" not in cols_fm else cols_fm.index("收件店名"), key="fm_s")
+
+            if st.button("🚀 產生全家批量匯入檔", key="b3"):
+                service_code = f_ship_service.split(" ->")[0].strip()
+                
+                fm_headers = [
+                    '寄件類型', '寄件人姓名', '寄件人手機國碼', '寄件人手機', '寄件服務', 
+                    '取件店舖', '取件店號', '收件人姓名', '收件人手機國碼', '收件人手機', 
+                    '包裹代收金額', '收款銀行戶名', '收款金融機構代號', '收款金融機構分行', 
+                    '收款銀行帳號', '收款帳號之身分證字號/統一編號/居留證號碼', 
+                    '指定退貨店舖店號', '指定退貨店舖', '備註'
+                ]
+
+                fm_data_rows = [fm_headers]
+
+                for _, row in df_fm_in.iterrows():
+                    r_name = str(row.get(col_fm_recv_name, '')).strip()
+                    r_phone = format_phone_number(row.get(col_fm_recv_phone, ''))
+                    r_store = str(row.get(col_fm_recv_store, '')).strip()
+                    r_store_code = str(row.get(col_fm_recv_store_code, '')).strip()
+
+                    fm_data_rows.append([
+                        "A",                            # 寄件類型
+                        f_sender_name,                  # 寄件人姓名
+                        f_sender_country,               # 寄件人手機國碼
+                        format_phone_number(f_sender_phone), # 寄件人手機
+                        service_code,                   # 寄件服務
+                        r_store,                        # 取件店舖
+                        r_store_code,                   # 取件店號
+                        r_name,                         # 收件人姓名
+                        "886",                          # 收件人手機國碼
+                        r_phone,                        # 收件人手機
+                        "0",                            # 包裹代收金額
+                        "", "", "", "", "", "", "", ""  # 其他備用欄位
+                    ])
+
+                wb_fm = Workbook()
+                ws_fm = wb_fm.active
+                ws_fm.title = "sheet1"
+
+                for row in fm_data_rows:
+                    ws_fm.append(row)
+
+                output_fm = io.BytesIO()
+                wb_fm.save(output_fm)
+                output_fm.seek(0)
+
+                st.success("🎉 全家批量匯入檔已完美生成！格式完全符合官方規格。")
+                
+                preview_fm_df = pd.DataFrame(fm_data_rows[1:], columns=fm_headers)
+                st.dataframe(preview_fm_df)
+
+                st.download_button(
+                    label="💾 下載全家官方批量匯入 Excel (.xlsx)",
+                    data=output_fm,
+                    file_name="全家店到店_批次匯入檔.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        except Exception as e:
+            st.error(f"❌ 處理全家匯入檔時發生錯誤：{e}")
+
+# ==========================================
+# ✂️ TAB 4: 超商 4 格單裁切工具 (智慧剔除空白頁)
+# ==========================================
+with tab4:
     st.markdown("此工具將控制項與預覽圖水平對齊，調整好第一頁後，後續所有頁數皆會同步套用。**系統已加入智慧防空頁機制，自動過濾無內容的空白頁！**")
 
     if 'pads' not in st.session_state:
@@ -416,11 +510,7 @@ with tab3:
                         quad.y1 - pad["bottom"]
                     )
                     
-                    # 智慧空頁檢測：檢查該區域內的文字長度與圖像內容
                     text_in_rect = page.get_text("text", clip=clip_rect).strip()
-                    pix_check = page.get_pixmap(clip=clip_rect)
-                    
-                    # 避免純網址頁尾（如 MultiplePrintC2CPinCode.aspx）誤判，必須包含交貨便關鍵字或實體文字長度 > 15
                     has_content = ("交貨便" in text_in_rect or "取件" in text_in_rect or len(text_in_rect) > 15)
                     
                     if has_content:
@@ -440,7 +530,7 @@ with tab3:
                 label="💾 下載印單機專用 PDF",
                 data=output_buffer.getvalue(),
                 file_name=f"{orig_name}_完美出貨單.pdf",
-                mime="application/pdf"
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
             
         except Exception as e:
