@@ -9,7 +9,6 @@ st.set_page_config(page_title="出貨自動化工具箱", page_icon="📦", layo
 
 st.title("📦 訂單處理與出貨自動化工具箱")
 
-# 頁籤選單：分開兩個功能
 tab1, tab2 = st.tabs(["📋 工具一：訂單自動分類與整理", "🚚 工具二：轉 7-11 批量匯入檔"])
 
 COLOR_PALETTE = [
@@ -118,11 +117,13 @@ with tab1:
             with c1:
                 col_ship = st.selectbox("1. 物流方式欄位", cols, index=0 if "物流" not in cols else cols.index("物流"))
                 col_name = st.selectbox("2. 收件人姓名欄位", cols, index=0 if "姓名" not in cols else cols.index("姓名"))
+                col_email = st.selectbox("3. 收件人 Email 欄位", cols, index=0 if "Email" not in cols and "信箱" not in cols and "mail" not in cols else (cols.index("Email") if "Email" in cols else (cols.index("信箱") if "信箱" in cols else cols.index("mail"))))
             with c2:
-                col_phone = st.selectbox("3. 收件人電話欄位", cols, index=0 if "電話" not in cols else cols.index("電話"))
-                col_addr = st.selectbox("4. 收件地址欄位", cols, index=0 if "地址" not in cols else cols.index("地址"))
+                col_phone = st.selectbox("4. 收件人電話欄位", cols, index=0 if "電話" not in cols else cols.index("電話"))
+                col_addr = st.selectbox("5. 收件地址欄位", cols, index=0 if "地址" not in cols else cols.index("地址"))
+                col_items = st.selectbox("6. 購買品項欄位", cols, index=0 if "品項" not in cols and "商品" not in cols else (cols.index("品項") if "品項" in cols else cols.index("商品")))
             with c3:
-                col_store = st.selectbox("5. 超商門市欄位", cols, index=0 if "門市" not in cols and "店" not in cols else (cols.index("門市") if "門市" in cols else cols.index("店")))
+                col_store = st.selectbox("7. 超商門市欄位", cols, index=0 if "門市" not in cols and "店" not in cols else (cols.index("門市") if "門市" in cols else cols.index("店")))
 
             if st.button("🚀 開始分類與整理", key="b1"):
                 df_post = df[df[col_ship].astype(str).str.contains("郵局|宅配|快捷|包裹", na=False)].copy()
@@ -132,41 +133,55 @@ with tab1:
                 known_keywords = "郵局|宅配|快捷|包裹|711|7-11|交貨便|統一|全家|店到店|順豐|香港|SF"
                 df_overseas = df[~df[col_ship].astype(str).str.contains(known_keywords, na=False)].copy()
 
+                # 1. 整理郵局包裹 / 宅配
                 post_data = []
                 for _, row in df_post.iterrows():
                     c, d, r, rest = parse_taiwan_address(str(row.get(col_addr, '')))
                     post_data.append({
                         "收件人姓名": str(row.get(col_name, '')).replace("台", "臺"),
                         "收件人電話": format_phone_number(row.get(col_phone, '')),
+                        "收件人Email": str(row.get(col_email, '')).strip(),
+                        "購買品項": str(row.get(col_items, '')).strip(),
                         "完整地址": str(row.get(col_addr, '')).replace("台", "臺"),
                         "縣市": c, "鄉鎮市區": d, "路名": r, "剩餘地址": rest
                     })
                 df_post_out = pd.DataFrame(post_data)
 
+                # 2. 整理 7-11 店到店（店號在前，店名在後）
                 seven_data = []
                 for _, row in df_711.iterrows():
                     code, name = parse_store_info(str(row.get(col_store, '')))
                     seven_data.append({
                         "收件人姓名": str(row.get(col_name, '')).replace("台", "臺"),
                         "收件人電話": format_phone_number(row.get(col_phone, '')),
+                        "收件人Email": str(row.get(col_email, '')).strip(),
+                        "購買品項": str(row.get(col_items, '')).strip(),
                         "原始門市資訊": str(row.get(col_store, '')).replace("台", "臺"),
-                        "收件店號": code, "收件店名": name,
-                        "寄件店號": "252975", "寄件店名": "永吉門市"
+                        "收件店號": code,
+                        "收件店名": name,
+                        "寄件店號": "252975",
+                        "寄件店名": "永吉門市"
                     })
                 df_711_out = pd.DataFrame(seven_data)
 
+                # 3. 整理 全家店到店（店號在前，店名在後）
                 family_data = []
                 for _, row in df_familymart.iterrows():
                     code, name = parse_store_info(str(row.get(col_store, '')))
                     family_data.append({
                         "收件人姓名": str(row.get(col_name, '')).replace("台", "臺"),
                         "收件人電話": format_phone_number(row.get(col_phone, '')),
+                        "收件人Email": str(row.get(col_email, '')).strip(),
+                        "購買品項": str(row.get(col_items, '')).strip(),
                         "原始門市資訊": str(row.get(col_store, '')).replace("台", "臺"),
-                        "收件店號": code, "收件店名": name,
-                        "寄件店號": "024502", "寄件店名": "永吉二店"
+                        "收件店號": code,
+                        "收件店名": name,
+                        "寄件店號": "024502",
+                        "寄件店名": "永吉二店"
                     })
                 df_familymart_out = pd.DataFrame(family_data)
 
+                # 4. 香港順豐 & 海外
                 df_sf_hk_out = clean_overseas_columns(df_sf_hk, col_phone)
                 df_overseas_out = clean_overseas_columns(df_overseas, col_phone)
 
@@ -186,7 +201,7 @@ with tab1:
                     highlight_duplicate_orders(wb, '其他海外寄送', df_overseas_out)
                     
                 output.seek(0)
-                st.success("🎉 分類與欄位拆分完成！重複訂單已標記背景顏色。")
+                st.success("🎉 分類與欄位拆分完成！已補齊 Email、購買品項，並調整店號店名順序。")
 
                 t1, t2, t3, t4, t5 = st.tabs(["郵局包裹", "7-11店到店", "全家店到店", "香港順豐", "其他海外"])
                 with t1: st.dataframe(df_post_out)
@@ -235,12 +250,15 @@ with tab2:
             with c7_2:
                 col_recv_phone = st.selectbox("收件人電話", cols_711, index=0 if "收件人電話" not in cols_711 else cols_711.index("收件人電話"))
             with c7_3:
-                col_recv_store = st.selectbox("收件門市名稱", cols_711, index=0 if "收件店名" not in cols_711 else cols_711.index("收件店名"))
+                col_recv_email = st.selectbox("收件人 Email", cols_711, index=0 if "收件人Email" not in cols_711 and "Email" not in cols_711 else (cols_711.index("收件人Email") if "收件人Email" in cols_711 else cols_711.index("Email")))
             with c7_4:
                 col_recv_store_code = st.selectbox("收件門市店號", cols_711, index=0 if "收件店號" not in cols_711 else cols_711.index("收件店號"))
+            
+            c7_5, _ = st.columns([1, 3])
+            with c7_5:
+                col_recv_store = st.selectbox("收件門市名稱", cols_711, index=0 if "收件店名" not in cols_711 else cols_711.index("收件店名"))
 
             if st.button("🚀 產生 7-11 批量匯入檔", key="b2"):
-                # 建立符合 711 官方標準公版的標題與範例架構
                 header_row_1 = [
                     None, "寄件人姓名", "寄件人電話", "寄件人mail", "實際包裏價值",
                     "收件門市", "收件門市店號", "收件人姓名\n(請填寫證件姓名)", "收件人電話", "收件人mail",
@@ -248,7 +266,6 @@ with tab2:
                     "退貨門市店號\n(非必填，退貨門市未填寫者，則依原寄件門市為退貨門市。此欄位有填寫者，退貨門市必填)"
                 ]
                 
-                # 第 2 列範例列 (官方要求保留)
                 header_row_2 = [
                     "範例", "王小明", "0987654321", "xx@gmial.com", 1200,
                     "百建門市", "211147", "李大美", "0912345678", "oooooo@gmail.com",
@@ -260,10 +277,10 @@ with tab2:
                 for _, row in df_711_in.iterrows():
                     r_name = str(row.get(col_recv_name, '')).strip()
                     r_phone = format_phone_number(row.get(col_recv_phone, ''))
+                    r_email = str(row.get(col_recv_email, '')).strip()
                     r_store = str(row.get(col_recv_store, '')).strip()
                     r_store_code = str(row.get(col_recv_store_code, '')).strip()
 
-                    # 新增資料列
                     data_rows.append([
                         None,             # A欄 (留空)
                         sender_name,      # 寄件人姓名
@@ -274,12 +291,11 @@ with tab2:
                         r_store_code,     # 收件門市店號
                         r_name,           # 收件人姓名
                         r_phone,          # 收件人電話
-                        "",               # 收件人mail
-                        "",               # 退貨門市 (預設空白，自動採原寄件門市)
+                        r_email,          # 收件人mail
+                        "",               # 退貨門市
                         ""                # 退貨門市店號
                     ])
 
-                # 生成 Excel
                 wb_711 = Workbook()
                 ws_711 = wb_711.active
                 ws_711.title = "工作表1"
@@ -287,17 +303,14 @@ with tab2:
                 for row in data_rows:
                     ws_711.append(row)
 
-                # 第一欄與標題處理
                 ws_711.cell(row=1, column=1, value=None)
-                ws_711.cell(row=1, column=1).value = None
 
                 output_711 = io.BytesIO()
                 wb_711.save(output_711)
                 output_711.seek(0)
 
-                st.success("🎉 7-11 批量匯入檔已完美生成！格式完全符合作者與公版規範。")
+                st.success("🎉 7-11 批量匯入檔已完美生成！收件人 Email 已自動帶入。")
                 
-                # 簡單預覽資料 (跳過範例列)
                 preview_df = pd.DataFrame(data_rows[2:], columns=[
                     "未命名", "寄件人姓名", "寄件人電話", "寄件人mail", "實際包裹價值",
                     "收件門市", "收件門市店號", "收件人姓名", "收件人電話", "收件人mail", "退貨門市", "退貨門市店號"
