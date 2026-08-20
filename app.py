@@ -2,11 +2,25 @@ import streamlit as st
 import pandas as pd
 import io
 import re
+from openpyxl.formatting.rule import CellIsRule
+from openpyxl.styles import PatternFill
 
 st.set_page_config(page_title="訂單自動分類整理工具", page_icon="📋", layout="wide")
 
 st.title("📋 訂單自動分類與欄位整理工具")
-st.markdown("上傳原始訂單 Excel/CSV 後，系統會自動按物流方式分類並整理成專屬欄位！")
+st.markdown("上傳原始訂單 Excel/CSV 後，系統會自動按物流方式分類並整理成專屬欄位！同姓名電話的重複訂單會自動塗上相同底色標記。")
+
+# 預設的高雅淺色背景池（給併單顧客使用）
+COLOR_PALETTE = [
+    "FFF2CC",  # 淺黃
+    "D9EAD3",  # 淺綠
+    "C9DAF8",  # 淺藍
+    "FCE5CD",  # 淺橘
+    "EAD1DC",  # 淺粉
+    "D9D2E9",  # 淺紫
+    "E0F7FA",  # 淺青
+    "F3E5F5",  # 淡紫
+]
 
 # 台灣地址拆分與清理輔助函式
 def parse_taiwan_address(address):
@@ -57,16 +71,14 @@ def parse_store_info(store_str):
     
     return store_code, store_name
 
-# 電話號碼格式化輔助函式（專治 Excel 號碼開頭 0 消失）
+# 電話號碼格式化輔助函式
 def format_phone_number(phone_val):
     if pd.isna(phone_val) or phone_val is None:
         return ""
     
-    # 轉為純文字並去除小數點 (如浮點數轉過來的 .0)
     phone_str = str(phone_val).split('.')[0].strip()
-    phone_str = re.sub(r'[^\d]', '', phone_str) # 只保留數字
+    phone_str = re.sub(r'[^\d]', '', phone_str)
     
-    # 如果是 9 位數（開頭 0 被吃掉的手機號碼），自動在最前面補 0
     if len(phone_str) == 9 and phone_str.startswith('9'):
         phone_str = '0' + phone_str
         
@@ -87,7 +99,6 @@ def clean_overseas_columns(df_in, col_phone_name):
         
     df_out.columns = [str(c).replace("台", "臺") for c in df_out.columns]
     
-    # 處理所有文字內容，並對電話號碼補 0
     for col in df_out.columns:
         if col == col_phone_name or "電話" in col or "手機" in col:
             df_out[col] = df_out[col].apply(format_phone_number)
@@ -96,11 +107,53 @@ def clean_overseas_columns(df_in, col_phone_name):
             
     return df_out
 
+# 針對重複姓名+電話的資料塗上同底色的函式
+def highlight_duplicate_orders(workbook, sheet_name, df):
+    if df.empty:
+        return
+    
+    ws = workbook[sheet_name]
+    
+    # 尋找 姓名 與 電話 的欄位位置
+    name_col_idx = None
+    phone_col_idx = None
+    
+    for idx, col in enumerate(df.columns):
+        col_str = str(col)
+        if "姓名" in col_str:
+            name_col_idx = idx
+        elif "電話" in col_str or "手機" in col_str:
+            phone_col_idx = idx
+            
+    if name_col_idx is None or phone_col_idx is None:
+        return
+    
+    # 建立 姓名+電話 組合清單
+    user_keys = []
+    for _, row in df.iterrows():
+        key = f"{str(row.iloc[name_col_idx]).strip()}_{str(row.iloc[phone_col_idx]).strip()}"
+        user_keys.append(key)
+        
+    # 計算出現頻率
+    counts = pd.Series(user_keys).value_counts()
+    dup_keys = counts[counts > 1].index.tolist()
+    
+    # 為每個重複顧客分配一個顏色
+    color_map = {}
+    for i, k in enumerate(dup_keys):
+        color_map[k] = COLOR_PALETTE[i % len(COLOR_PALETTE)]
+        
+    # 上色（Excel 第一列是表頭，所以從 row=2 開始）
+    for r_idx, k in enumerate(user_keys, start=2):
+        if k in color_map:
+            fill = PatternFill(start_color=color_map[k], end_color=color_map[k], fill_type="solid")
+            for c_idx in range(1, len(df.columns) + 1):
+                ws.cell(row=r_idx, column=c_idx).fill = fill
+
 uploaded_file = st.file_uploader("請上傳訂單檔案 (支援 .xlsx, .xls, .csv)", type=["xlsx", "xls", "csv"])
 
 if uploaded_file is not None:
     try:
-        # 讀取檔案時強制將所有欄位先視為字串，避免讀取階段 0 就消失
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file, dtype=str)
         else:
@@ -123,7 +176,6 @@ if uploaded_file is not None:
             col_store = st.selectbox("5. 超商門市欄位（會自動精準拆分為純數字店號與純門市名稱）", cols, index=0 if "門市" not in cols and "店" not in cols else (cols.index("門市") if "門市" in cols else cols.index("店")))
 
         if st.button("🚀 開始分類與整理"):
-            # 1. 物流關鍵字比對
             df_post = df[df[col_ship].astype(str).str.contains("郵局|宅配|快捷|包裹", na=False)].copy()
             df_711 = df[df[col_ship].astype(str).str.contains("711|7-11|交貨便|統一", na=False)].copy()
             df_familymart = df[df[col_ship].astype(str).str.contains("全家|店到店", na=False)].copy()
@@ -183,11 +235,11 @@ if uploaded_file is not None:
                 })
             df_familymart_out = pd.DataFrame(family_data)
 
-            # 4. 香港順豐 & 海外
+            # 香港順豐 & 海外
             df_sf_hk_out = clean_overseas_columns(df_sf_hk, col_phone)
             df_overseas_out = clean_overseas_columns(df_overseas, col_phone)
 
-            # 輸出多 Sheet Excel（強制寫入為字串格式）
+            # 輸出多 Sheet Excel，並進行併單色塊標記
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_post_out.to_excel(writer, sheet_name='郵局包裹寄送', index=False)
@@ -196,9 +248,18 @@ if uploaded_file is not None:
                 df_sf_hk_out.to_excel(writer, sheet_name='香港順豐到付', index=False)
                 df_overseas_out.to_excel(writer, sheet_name='其他海外寄送', index=False)
                 
+                wb = writer.book
+                
+                # 自動分析並塗色重複顧客
+                highlight_duplicate_orders(wb, '郵局包裹寄送', df_post_out)
+                highlight_duplicate_orders(wb, '711店到店', df_711_out)
+                highlight_duplicate_orders(wb, '全家店到店', df_familymart_out)
+                highlight_duplicate_orders(wb, '香港順豐到付', df_sf_hk_out)
+                highlight_duplicate_orders(wb, '其他海外寄送', df_overseas_out)
+                
             output.seek(0)
 
-            st.success("🎉 電話號碼已被修正！開頭的 0 已完全保留與補齊。")
+            st.success("🎉 分類與欄位拆分完成！相同「姓名 + 電話」的重複訂單已自動塗上顏色背景標記。")
 
             t1, t2, t3, t4, t5 = st.tabs(["郵局包裹", "7-11店到店", "全家店到店", "香港順豐", "其他海外"])
             with t1: st.dataframe(df_post_out)
