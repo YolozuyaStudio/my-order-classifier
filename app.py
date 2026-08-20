@@ -8,13 +8,19 @@ st.set_page_config(page_title="訂單自動分類整理工具", page_icon="📋"
 st.title("📋 訂單自動分類與欄位整理工具")
 st.markdown("上傳原始訂單 Excel/CSV 後，系統會自動按物流方式分類並整理成專屬欄位！")
 
-# 台灣地址拆分輔助函式（縣市、鄉鎮市區、路名、剩餘地址）
+# 台灣地址拆分與清理輔助函式（縣市、鄉鎮市區、路名、剩餘地址）
 def parse_taiwan_address(address):
     if not isinstance(address, str) or not address:
         return "", "", "", ""
     
-    # 移除郵遞區號與多餘空白
+    address = address.strip()
+    
+    # 1. 移除地址末尾的 ,台灣 或 台灣
+    address = re.sub(r'[\,\s]*台灣[\,\s]*$', '', address, flags=re.IGNORECASE)
     address = re.sub(r'^\d{3,5}\s*', '', address.strip())
+    
+    # 2. 將所有的「台」自動替換成「臺」
+    address = address.replace("台", "臺")
     
     city, district, road, rest = "", "", "", ""
     
@@ -40,27 +46,53 @@ def parse_taiwan_address(address):
         
     return city, district, road, rest
 
-# 店號與店名拆分輔助函式
+# 店號與店名拆分與清理輔助函式
 def parse_store_info(store_str):
     if not isinstance(store_str, str) or not store_str:
         return "", ""
+    
     store_str = store_str.strip()
     
-    # 尋找 5-8 位的連續數字作為店號
+    # 1. 移除 [代碼:] 或 [代碼：] 等相關字樣
+    store_str = re.sub(r'\[?代碼[\:：]?\]?', '', store_str)
+    
+    # 2. 尋找 5-8 位的連續數字作為店號
     code_match = re.search(r'\b\d{5,8}\b', store_str)
     if code_match:
         store_code = code_match.group(0)
         # 清除店號及常見分隔符，剩餘字串即為店名
         store_name = re.sub(r'\b\d{5,8}\b', '', store_str)
-        store_name = re.sub(r'[\(\)（）\-\_\s]', '', store_name)
+        store_name = re.sub(r'[\(\)（）\-\_\s\[\]]', '', store_name)
+        store_name = store_name.replace("台", "臺")
         return store_code, store_name
     else:
         # 若無數字，嘗試用常見符號切割
-        parts = re.split(r'[\(\)（）\-\_\s]+', store_str)
+        parts = re.split(r'[\(\)（）\-\_\s\[\]]+', store_str)
         parts = [p for p in parts if p]
         if len(parts) >= 2:
-            return parts[0], parts[1]
-        return "", store_str
+            return parts[0], parts[1].replace("台", "臺")
+        clean_name = store_str.replace("台", "臺")
+        return "", clean_name
+
+# 移除指定多餘欄位輔助函式（適用於順豐與海外）
+def clean_overseas_columns(df_in):
+    df_out = df_in.copy()
+    
+    # 需要刪除的精準欄位或含有關鍵字的欄位
+    cols_to_drop = []
+    for col in df_out.columns:
+        col_str = str(col)
+        if any(keyword in col_str for keyword in ["付款方式", "取貨門市", "取貨日期", "發票"]):
+            cols_to_drop.append(col)
+            
+    if cols_to_drop:
+        df_out = df_out.drop(columns=cols_to_drop)
+        
+    # 將欄位與內容中的「台」替換成「臺」
+    df_out.columns = [str(c).replace("台", "臺") for c in df_out.columns]
+    df_out = df_out.map(lambda x: str(x).replace("台", "臺") if isinstance(x, str) else x)
+    
+    return df_out
 
 uploaded_file = st.file_uploader("請上傳訂單檔案 (支援 .xlsx, .xls, .csv)", type=["xlsx", "xls", "csv"])
 
@@ -83,9 +115,9 @@ if uploaded_file is not None:
             col_name = st.selectbox("2. 收件人姓名欄位", cols, index=0 if "姓名" not in cols else cols.index("姓名"))
         with c2:
             col_phone = st.selectbox("3. 收件人電話欄位", cols, index=0 if "電話" not in cols else cols.index("電話"))
-            col_addr = st.selectbox("4. 收件地址欄位（會自動拆分為 縣市/分區/路名/剩餘地址）", cols, index=0 if "地址" not in cols else cols.index("地址"))
+            col_addr = st.selectbox("4. 收件地址欄位（會自動拆分為 縣市/分區/路名/剩餘地址，並移除末尾台灣與替換臺）", cols, index=0 if "地址" not in cols else cols.index("地址"))
         with c3:
-            col_store = st.selectbox("5. 超商門市欄位（店名/店號在同欄位，會自動拆分）", cols, index=0 if "門市" not in cols and "店" not in cols else (cols.index("門市") if "門市" in cols else cols.index("店")))
+            col_store = st.selectbox("5. 超商門市欄位（會自動拆分並移除 [代碼:]）", cols, index=0 if "門市" not in cols and "店" not in cols else (cols.index("門市") if "門市" in cols else cols.index("店")))
 
         if st.button("🚀 開始分類與整理"):
             # 1. 物流關鍵字比對（郵局包含：郵局、宅配、快捷、包裹）
@@ -97,14 +129,15 @@ if uploaded_file is not None:
             known_keywords = "郵局|宅配|快捷|包裹|711|7-11|交貨便|統一|全家|店到店|順豐|香港|SF"
             df_overseas = df[~df[col_ship].astype(str).str.contains(known_keywords, na=False)].copy()
 
-            # 整理郵局包裹
+            # 整理郵局包裹 / 宅配
             post_data = []
             for _, row in df_post.iterrows():
                 c, d, r, rest = parse_taiwan_address(str(row.get(col_addr, '')))
+                name_clean = str(row.get(col_name, '')).replace("台", "臺")
                 post_data.append({
-                    "收件人姓名": row.get(col_name, ''),
+                    "收件人姓名": name_clean,
                     "收件人電話": row.get(col_phone, ''),
-                    "完整地址": row.get(col_addr, ''),
+                    "完整地址": str(row.get(col_addr, '')).replace("台", "臺"),
                     "縣市": c,
                     "鄉鎮市區": d,
                     "路名": r,
@@ -116,10 +149,11 @@ if uploaded_file is not None:
             seven_data = []
             for _, row in df_711.iterrows():
                 code, name = parse_store_info(str(row.get(col_store, '')))
+                name_clean = str(row.get(col_name, '')).replace("台", "臺")
                 seven_data.append({
-                    "收件人姓名": row.get(col_name, ''),
+                    "收件人姓名": name_clean,
                     "收件人電話": row.get(col_phone, ''),
-                    "原始門市資訊": row.get(col_store, ''),
+                    "原始門市資訊": str(row.get(col_store, '')).replace("台", "臺"),
                     "收件店號": code,
                     "收件店名": name,
                     "寄件店號": "252975",
@@ -131,10 +165,11 @@ if uploaded_file is not None:
             family_data = []
             for _, row in df_familymart.iterrows():
                 code, name = parse_store_info(str(row.get(col_store, '')))
+                name_clean = str(row.get(col_name, '')).replace("台", "臺")
                 family_data.append({
-                    "收件人姓名": row.get(col_name, ''),
+                    "收件人姓名": name_clean,
                     "收件人電話": row.get(col_phone, ''),
-                    "原始門市資訊": row.get(col_store, ''),
+                    "原始門市資訊": str(row.get(col_store, '')).replace("台", "臺"),
                     "收件店號": code,
                     "收件店名": name,
                     "寄件店號": "024502",
@@ -142,9 +177,9 @@ if uploaded_file is not None:
                 })
             df_familymart_out = pd.DataFrame(family_data)
 
-            # 4. 香港順豐 & 海外（保留完整原始資料）
-            df_sf_hk_out = df_sf_hk
-            df_overseas_out = df_overseas
+            # 4. 香港順豐 & 海外（清理多餘欄位與將台替換為臺）
+            df_sf_hk_out = clean_overseas_columns(df_sf_hk)
+            df_overseas_out = clean_overseas_columns(df_overseas)
 
             # 輸出成多個 Sheet 的 Excel
             output = io.BytesIO()
@@ -157,7 +192,7 @@ if uploaded_file is not None:
                 
             output.seek(0)
 
-            st.success("🎉 分類與欄位拆分完成！您可以點擊下方頁籤預覽，或直接下載 Excel 檔。")
+            st.success("🎉 分類與欄位拆分整理完成！已自動將「台」轉換為「臺」，並清理多餘欄位。")
 
             t1, t2, t3, t4, t5 = st.tabs(["郵局包裹", "7-11店到店", "全家店到店", "香港順豐", "其他海外"])
             with t1: st.dataframe(df_post_out)
