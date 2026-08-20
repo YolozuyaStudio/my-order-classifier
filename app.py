@@ -1,15 +1,21 @@
 import streamlit as st
 import pandas as pd
+import fitz  # PyMuPDF
 import io
 import re
+from PIL import Image
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
 
-st.set_page_config(page_title="出貨自動化工具箱", page_icon="📦", layout="wide")
+st.set_page_config(page_title="出貨自動化全能工具箱", page_icon="📦", layout="wide")
 
-st.title("📦 訂單處理與出貨自動化工具箱")
+st.title("📦 訂單處理與出貨自動化全能工具箱")
 
-tab1, tab2 = st.tabs(["📋 工具一：訂單自動分類與整理", "🚚 工具二：轉 7-11 批量匯入檔"])
+tab1, tab2, tab3 = st.tabs([
+    "📋 工具一：訂單自動分類與整理", 
+    "🚚 工具二：轉 7-11 批量匯入檔", 
+    "✂️ 工具三：超商 4 格單裁切工具"
+])
 
 COLOR_PALETTE = [
     "FFF2CC", "D9EAD3", "C9DAF8", "FCE5CD", "EAD1DC", "D9D2E9", "E0F7FA", "F3E5F5"
@@ -133,7 +139,6 @@ with tab1:
                 known_keywords = "郵局|宅配|快捷|包裹|711|7-11|交貨便|統一|全家|店到店|順豐|香港|SF"
                 df_overseas = df[~df[col_ship].astype(str).str.contains(known_keywords, na=False)].copy()
 
-                # 1. 整理郵局包裹 / 宅配
                 post_data = []
                 for _, row in df_post.iterrows():
                     c, d, r, rest = parse_taiwan_address(str(row.get(col_addr, '')))
@@ -147,7 +152,6 @@ with tab1:
                     })
                 df_post_out = pd.DataFrame(post_data)
 
-                # 2. 整理 7-11 店到店（店號在前，店名在後）
                 seven_data = []
                 for _, row in df_711.iterrows():
                     code, name = parse_store_info(str(row.get(col_store, '')))
@@ -164,7 +168,6 @@ with tab1:
                     })
                 df_711_out = pd.DataFrame(seven_data)
 
-                # 3. 整理 全家店到店（店號在前，店名在後）
                 family_data = []
                 for _, row in df_familymart.iterrows():
                     code, name = parse_store_info(str(row.get(col_store, '')))
@@ -181,7 +184,6 @@ with tab1:
                     })
                 df_familymart_out = pd.DataFrame(family_data)
 
-                # 4. 香港順豐 & 海外
                 df_sf_hk_out = clean_overseas_columns(df_sf_hk, col_phone)
                 df_overseas_out = clean_overseas_columns(df_overseas, col_phone)
 
@@ -282,18 +284,8 @@ with tab2:
                     r_store_code = str(row.get(col_recv_store_code, '')).strip()
 
                     data_rows.append([
-                        None,             # A欄 (留空)
-                        sender_name,      # 寄件人姓名
-                        sender_phone,     # 寄件人電話
-                        sender_mail,      # 寄件人mail
-                        parcel_val,       # 實際包裹價值
-                        r_store,          # 收件門市
-                        r_store_code,     # 收件門市店號
-                        r_name,           # 收件人姓名
-                        r_phone,          # 收件人電話
-                        r_email,          # 收件人mail
-                        "",               # 退貨門市
-                        ""                # 退貨門市店號
+                        None, sender_name, sender_phone, sender_mail, parcel_val,
+                        r_store, r_store_code, r_name, r_phone, r_email, "", ""
                     ])
 
                 wb_711 = Workbook()
@@ -325,3 +317,131 @@ with tab2:
                 )
         except Exception as e:
             st.error(f"❌ 處理 711 匯入檔時發生錯誤：{e}")
+
+# ==========================================
+# ✂️ TAB 3: 超商 4 格單裁切工具 (智慧剔除空白頁)
+# ==========================================
+with tab3:
+    st.markdown("此工具將控制項與預覽圖水平對齊，調整好第一頁後，後續所有頁數皆會同步套用。**系統已加入智慧防空頁機制，自動過濾無內容的空白頁！**")
+
+    if 'pads' not in st.session_state:
+        st.session_state.pads = {
+            "左上": {"top": 15, "bottom": 15, "left": 15, "right": 15},
+            "右上": {"top": 15, "bottom": 15, "left": 15, "right": 15},
+            "左下": {"top": 15, "bottom": 15, "left": 15, "right": 15},
+            "右下": {"top": 15, "bottom": 15, "left": 15, "right": 15}
+        }
+
+    uploaded_pdf = st.file_uploader("請選擇或拖曳 PDF 檔案至此", type=["pdf"], key="u3")
+
+    if uploaded_pdf is not None:
+        try:
+            file_bytes = uploaded_pdf.read()
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            
+            temp_pads = {}
+            st.markdown("---")
+            st.subheader("🛠️ 四格獨立微調與即時預覽")
+            
+            keys = ["左上", "右上", "左下", "右下"]
+            
+            preview_doc = fitz.open()
+            first_page = doc[0]
+            p_rect = first_page.rect
+            p_mid_x = p_rect.width / 2
+            p_mid_y = p_rect.height / 2
+            
+            quads_dict = {
+                "左上": fitz.Rect(0, 0, p_mid_x, p_mid_y),
+                "右上": fitz.Rect(p_mid_x, 0, p_rect.width, p_mid_y),
+                "左下": fitz.Rect(0, p_mid_y, p_mid_x, p_rect.height),
+                "右下": fitz.Rect(p_mid_x, p_mid_y, p_rect.width, p_rect.height)
+            }
+            
+            for idx, key in enumerate(keys):
+                row_col1, row_col2 = st.columns([1, 2])
+                
+                with row_col1:
+                    st.markdown(f"### 📍 【{key}】區域控制")
+                    t = st.number_input(f"裁切上邊 ({key})", value=st.session_state.pads[key]["top"], step=5, key=f"t_{key}")
+                    b = st.number_input(f"裁切下邊 ({key})", value=st.session_state.pads[key]["bottom"], step=5, key=f"b_{key}")
+                    l = st.number_input(f"裁切左邊 ({key})", value=st.session_state.pads[key]["left"], step=5, key=f"l_{key}")
+                    r = st.number_input(f"裁切右邊 ({key})", value=st.session_state.pads[key]["right"], step=5, key=f"r_{key}")
+                    temp_pads[key] = {"top": t, "bottom": b, "left": l, "right": r}
+                    st.session_state.pads[key] = temp_pads[key]
+                
+                with row_col2:
+                    quad = quads_dict[key]
+                    clip_rect = fitz.Rect(
+                        quad.x0 + l,
+                        quad.y0 + t,
+                        quad.x1 - r,
+                        quad.y1 - b
+                    )
+                    temp_page = preview_doc.new_page(width=300, height=450)
+                    temp_page.show_pdf_page(temp_page.rect, doc, 0, clip=clip_rect)
+                    
+                    pix = temp_page.get_pixmap(dpi=120)
+                    img_data = pix.tobytes("png")
+                    img = Image.open(io.BytesIO(img_data))
+                    st.image(img, caption=f"{key} 區塊即時結果", width=220)
+                
+                st.markdown("---")
+                
+            preview_doc.close()
+
+            out_doc = fitz.open()
+            valid_page_count = 0
+
+            for page in doc:
+                rect = page.rect
+                mid_x = rect.width / 2
+                mid_y = rect.height / 2
+                
+                page_quads = {
+                    "左上": fitz.Rect(0, 0, mid_x, mid_y),
+                    "右上": fitz.Rect(mid_x, 0, rect.width, mid_y),
+                    "左下": fitz.Rect(0, mid_y, mid_x, rect.height),
+                    "右下": fitz.Rect(mid_x, p_mid_y, rect.width, rect.height)
+                }
+                
+                for key in keys:
+                    quad = page_quads[key]
+                    pad = st.session_state.pads[key]
+                    
+                    clip_rect = fitz.Rect(
+                        quad.x0 + pad["left"],
+                        quad.y0 + pad["top"],
+                        quad.x1 - pad["right"],
+                        quad.y1 - pad["bottom"]
+                    )
+                    
+                    # 智慧空頁檢測：檢查該區域內的文字長度與圖像內容
+                    text_in_rect = page.get_text("text", clip=clip_rect).strip()
+                    pix_check = page.get_pixmap(clip=clip_rect)
+                    
+                    # 避免純網址頁尾（如 MultiplePrintC2CPinCode.aspx）誤判，必須包含交貨便關鍵字或實體文字長度 > 15
+                    has_content = ("交貨便" in text_in_rect or "取件" in text_in_rect or len(text_in_rect) > 15)
+                    
+                    if has_content:
+                        new_page = out_doc.new_page(width=300, height=450)
+                        new_page.show_pdf_page(new_page.rect, doc, page.number, clip=clip_rect)
+                        valid_page_count += 1
+            
+            output_buffer = io.BytesIO()
+            out_doc.save(output_buffer)
+            out_doc.close()
+            doc.close()
+            
+            orig_name = uploaded_pdf.name.rsplit('.', 1)[0]
+            
+            st.success(f"🎉 處理完成！已自動過濾空白頁，共精準保留 {valid_page_count} 頁有效出貨單。")
+            st.download_button(
+                label="💾 下載印單機專用 PDF",
+                data=output_buffer.getvalue(),
+                file_name=f"{orig_name}_完美出貨單.pdf",
+                mime="application/pdf"
+            )
+            
+        except Exception as e:
+            st.error(f"❌ 發生錯誤：{e}")
