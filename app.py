@@ -46,39 +46,34 @@ def parse_taiwan_address(address):
         
     return city, district, road, rest
 
-# 店號與店名拆分與清理輔助函式
+# 超商門市與店號精準拆分輔助函式（專治 [代碼:123456] 格式）
 def parse_store_info(store_str):
     if not isinstance(store_str, str) or not store_str:
         return "", ""
     
     store_str = store_str.strip()
     
-    # 1. 移除 [代碼:] 或 [代碼：] 等相關字樣
-    store_str = re.sub(r'\[?代碼[\:：]?\]?', '', store_str)
+    # 1. 精準抓取連續 5 至 8 位數字當作「店號」
+    code_match = re.search(r'\d{5,8}', store_str)
+    store_code = code_match.group(0) if code_match else ""
     
-    # 2. 尋找 5-8 位的連續數字作為店號
-    code_match = re.search(r'\b\d{5,8}\b', store_str)
-    if code_match:
-        store_code = code_match.group(0)
-        # 清除店號及常見分隔符，剩餘字串即為店名
-        store_name = re.sub(r'\b\d{5,8}\b', '', store_str)
-        store_name = re.sub(r'[\(\)（）\-\_\s\[\]]', '', store_name)
-        store_name = store_name.replace("台", "臺")
-        return store_code, store_name
-    else:
-        # 若無數字，嘗試用常見符號切割
-        parts = re.split(r'[\(\)（）\-\_\s\[\]]+', store_str)
-        parts = [p for p in parts if p]
-        if len(parts) >= 2:
-            return parts[0], parts[1].replace("台", "臺")
-        clean_name = store_str.replace("台", "臺")
-        return "", clean_name
+    # 2. 清理「店名」：把中括號、代碼字樣、數字以及所有符號徹底刪除
+    store_name = re.sub(r'\[.*?\]', '', store_str)  # 刪除 [...] 包含裡面的所有文字
+    store_name = re.sub(r'\(.*?\)', '', store_name) # 刪除 (...) 包含裡面的所有文字
+    store_name = re.sub(r'（.*?）', '', store_name) # 刪除全形（...）
+    store_name = re.sub(r'代碼[\:：]?', '', store_name)
+    store_name = re.sub(r'\d+', '', store_name)     # 刪除所有數字
+    store_name = re.sub(r'[\:\：\-\_\s\w]*', '', store_name) # 清理剩餘符號
+    
+    # 3. 確保只留中文門市名稱，並將「台」替換為「臺」
+    store_name = store_name.replace("台", "臺").strip()
+    
+    return store_code, store_name
 
 # 移除指定多餘欄位輔助函式（適用於順豐與海外）
 def clean_overseas_columns(df_in):
     df_out = df_in.copy()
     
-    # 需要刪除的精準欄位或含有關鍵字的欄位
     cols_to_drop = []
     for col in df_out.columns:
         col_str = str(col)
@@ -88,7 +83,6 @@ def clean_overseas_columns(df_in):
     if cols_to_drop:
         df_out = df_out.drop(columns=cols_to_drop)
         
-    # 將欄位與內容中的「台」替換成「臺」
     df_out.columns = [str(c).replace("台", "臺") for c in df_out.columns]
     df_out = df_out.map(lambda x: str(x).replace("台", "臺") if isinstance(x, str) else x)
     
@@ -117,10 +111,10 @@ if uploaded_file is not None:
             col_phone = st.selectbox("3. 收件人電話欄位", cols, index=0 if "電話" not in cols else cols.index("電話"))
             col_addr = st.selectbox("4. 收件地址欄位（會自動拆分為 縣市/分區/路名/剩餘地址，並移除末尾台灣與替換臺）", cols, index=0 if "地址" not in cols else cols.index("地址"))
         with c3:
-            col_store = st.selectbox("5. 超商門市欄位（會自動拆分並移除 [代碼:]）", cols, index=0 if "門市" not in cols and "店" not in cols else (cols.index("門市") if "門市" in cols else cols.index("店")))
+            col_store = st.selectbox("5. 超商門市欄位（會自動精準拆分為純數字店號與純門市名稱）", cols, index=0 if "門市" not in cols and "店" not in cols else (cols.index("門市") if "門市" in cols else cols.index("店")))
 
         if st.button("🚀 開始分類與整理"):
-            # 1. 物流關鍵字比對（郵局包含：郵局、宅配、快捷、包裹）
+            # 1. 物流關鍵字比對
             df_post = df[df[col_ship].astype(str).str.contains("郵局|宅配|快捷|包裹", na=False)].copy()
             df_711 = df[df[col_ship].astype(str).str.contains("711|7-11|交貨便|統一", na=False)].copy()
             df_familymart = df[df[col_ship].astype(str).str.contains("全家|店到店", na=False)].copy()
@@ -177,11 +171,11 @@ if uploaded_file is not None:
                 })
             df_familymart_out = pd.DataFrame(family_data)
 
-            # 4. 香港順豐 & 海外（清理多餘欄位與將台替換為臺）
+            # 4. 香港順豐 & 海外
             df_sf_hk_out = clean_overseas_columns(df_sf_hk)
             df_overseas_out = clean_overseas_columns(df_overseas)
 
-            # 輸出成多個 Sheet 的 Excel
+            # 輸出多 Sheet Excel
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_post_out.to_excel(writer, sheet_name='郵局包裹寄送', index=False)
@@ -192,7 +186,7 @@ if uploaded_file is not None:
                 
             output.seek(0)
 
-            st.success("🎉 分類與欄位拆分整理完成！已自動將「台」轉換為「臺」，並清理多餘欄位。")
+            st.success("🎉 分類與欄位拆分整理完成！店號與店名已精準分離。")
 
             t1, t2, t3, t4, t5 = st.tabs(["郵局包裹", "7-11店到店", "全家店到店", "香港順豐", "其他海外"])
             with t1: st.dataframe(df_post_out)
