@@ -46,26 +46,24 @@ def parse_taiwan_address(address):
         
     return city, district, road, rest
 
-# 超商門市與店號精準拆分輔助函式（專治 [代碼:123456] 格式）
+# 超商門市與店號精準拆分輔助函式
 def parse_store_info(store_str):
     if not isinstance(store_str, str) or not store_str:
         return "", ""
     
     store_str = store_str.strip()
     
-    # 1. 精準抓取連續 5 至 8 位數字當作「店號」
+    # 1. 抓取連續 5 至 8 位數字當作「店號」
     code_match = re.search(r'\d{5,8}', store_str)
     store_code = code_match.group(0) if code_match else ""
     
-    # 2. 清理「店名」：把中括號、代碼字樣、數字以及所有符號徹底刪除
-    store_name = re.sub(r'\[.*?\]', '', store_str)  # 刪除 [...] 包含裡面的所有文字
-    store_name = re.sub(r'\(.*?\)', '', store_name) # 刪除 (...) 包含裡面的所有文字
-    store_name = re.sub(r'（.*?）', '', store_name) # 刪除全形（...）
-    store_name = re.sub(r'代碼[\:：]?', '', store_name)
-    store_name = re.sub(r'\d+', '', store_name)     # 刪除所有數字
-    store_name = re.sub(r'[\:\：\-\_\s\w]*', '', store_name) # 清理剩餘符號
+    # 2. 精準切除 [代碼:123456] 或 (代碼:123456) 等包含數字的括號
+    store_name = re.sub(r'\[.*?\]', '', store_str)
+    store_name = re.sub(r'\(.*?\)', '', store_name)
+    store_name = re.sub(r'（.*?）', '', store_name)
+    store_name = re.sub(r'代碼[\:：]?\d+', '', store_name)
     
-    # 3. 確保只留中文門市名稱，並將「台」替換為「臺」
+    # 3. 把「台」替換為「臺」，並修剪前後空格與殘留符號
     store_name = store_name.replace("台", "臺").strip()
     
     return store_code, store_name
@@ -186,7 +184,7 @@ if uploaded_file is not None:
                 
             output.seek(0)
 
-            st.success("🎉 分類與欄位拆分整理完成！店號與店名已精準分離。")
+            st.success("🎉 門市名稱與店號已完美分離！")
 
             t1, t2, t3, t4, t5 = st.tabs(["郵局包裹", "7-11店到店", "全家店到店", "香港順豐", "其他海外"])
             with t1: st.dataframe(df_post_out)
